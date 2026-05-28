@@ -27,15 +27,44 @@ function shuffle(arr) {
   return arr;
 }
 
+function getValueRank(value, trumpRankValue) {
+  // 返回该点数在普通副牌序列中的排名（A最大=0，依次递减）
+  // trumpRankValue 被移出序列
+  const order = ['A','K','Q','J','10','9','8','7','6','5','4','3','2'];
+  const filtered = order.filter(v => v !== trumpRankValue);
+  return filtered.indexOf(value);
+}
+
 function cardPower(card, trumpSuit, trumpRankValue) {
   const suitOrder = { spade: 4, heart: 3, diamond: 2, club: 1, joker: 0 };
-  if (card.suit === 'joker') return card.value === 'big' ? 100000 : 99999;
+
+  // 王牌
+  if (card.suit === 'joker') {
+    return card.value === 'big' ? 100000 : 99900;
+  }
+
   const isTrumpSuit = card.suit === trumpSuit;
   const isTrumpRank = card.value === trumpRankValue;
-  if (isTrumpSuit && isTrumpRank) return 90000;
-  if (isTrumpRank) return 80000 + suitOrder[card.suit] * 100;
-  if (isTrumpSuit) return 70000 + VALUE_ORDER[card.value] * 10;
-  return 10000 + suitOrder[card.suit] * 1000 + VALUE_ORDER[card.value] * 10;
+
+  // 主级牌（正主）
+  if (isTrumpSuit && isTrumpRank) return 99800;
+
+  // 副级牌（按花色：黑桃>红桃>方块>梅花，但黑桃已作为主级牌处理）
+  if (isTrumpRank) {
+    const offset = { heart: 0, diamond: 1, club: 2 };
+    return 99700 - offset[card.suit] * 100;
+  }
+
+  // 主花色普通牌
+  if (isTrumpSuit) {
+    const rank = getValueRank(card.value, trumpRankValue);
+    return 99400 - rank * 100;
+  }
+
+  // 副牌（按花色和点数）
+  const rank = getValueRank(card.value, trumpRankValue);
+  const suitBase = { spade: 24000, heart: 22000, diamond: 20000, club: 18000 };
+  return suitBase[card.suit] - rank * 100;
 }
 
 function isTrump(card, trumpSuit, trumpRankValue) {
@@ -72,7 +101,7 @@ function isConsecutivePairs(groups, trumpSuit, trumpRankValue) {
   if (!groups.every(g => g.length === 2)) return false;
   const vals = groups.map(g => cardPower(g[0], trumpSuit, trumpRankValue)).sort((a,b)=>a-b);
   for (let i = 1; i < vals.length; i++) {
-    if (vals[i] - vals[i-1] !== 10) return false; // power 步长为10
+    if (vals[i] - vals[i-1] !== 100) return false; // 相邻对子power步长为100
   }
   return true;
 }
@@ -124,48 +153,124 @@ function getPairs(hand, suit, trumpSuit, trumpRankValue) {
 function getTractors(hand, suit, trumpSuit, trumpRankValue) {
   const pairs = getPairs(hand, suit, trumpSuit, trumpRankValue);
   if (pairs.length < 2) return [];
-  // 按 power 排序
+  // 按 power 升序
   pairs.sort((a,b) => cardPower(a[0], trumpSuit, trumpRankValue) - cardPower(b[0], trumpSuit, trumpRankValue));
   const tractors = [];
   for (let i = 0; i < pairs.length - 1; i++) {
     let seq = [pairs[i]];
     for (let j = i + 1; j < pairs.length; j++) {
       const diff = cardPower(pairs[j][0], trumpSuit, trumpRankValue) - cardPower(seq[seq.length-1][0], trumpSuit, trumpRankValue);
-      if (diff === 10) { seq.push(pairs[j]); }
-      else if (diff > 10) break;
+      if (diff === 100) { seq.push(pairs[j]); }
+      else if (diff > 100) break;
     }
     if (seq.length >= 2) tractors.push(seq);
   }
   return tractors;
 }
 
-// 甩牌检测：其他手牌是否有同suit且大于minCard的牌
+// 解析甩牌的内部组件（拖拉机、对子、单张）
+function analyzeDumpComponents(cards, trumpSuit, trumpRankValue) {
+  const groups = groupByPairs(cards);
+  const pairGroups = groups.filter(g => g.length === 2);
+  const singleGroups = groups.filter(g => g.length === 1);
+
+  const tractors = [];
+  const usedPairs = new Set();
+
+  if (pairGroups.length >= 2) {
+    pairGroups.sort((a, b) => cardPower(a[0], trumpSuit, trumpRankValue) - cardPower(b[0], trumpSuit, trumpRankValue));
+    let seq = [pairGroups[0]];
+    for (let i = 1; i < pairGroups.length; i++) {
+      const diff = cardPower(pairGroups[i][0], trumpSuit, trumpRankValue) - cardPower(seq[seq.length - 1][0], trumpSuit, trumpRankValue);
+      if (diff === 100) {
+        seq.push(pairGroups[i]);
+      } else if (diff > 100) {
+        if (seq.length >= 2) {
+          tractors.push([...seq]);
+          for (const g of seq) usedPairs.add(g);
+        }
+        seq = [pairGroups[i]];
+      }
+    }
+    if (seq.length >= 2) {
+      tractors.push([...seq]);
+      for (const g of seq) usedPairs.add(g);
+    }
+  }
+
+  // 剩余未组成拖拉机的对子
+  const remainingPairs = pairGroups.filter(g => !usedPairs.has(g));
+  const singles = singleGroups.map(g => g[0]);
+
+  return { tractors, pairs: remainingPairs, singles };
+}
+
+// 甩牌检测：其他手牌是否有大于甩牌中任一组件的牌
 function canBeatDump(dumpCards, otherHands, trumpSuit, trumpRankValue) {
   const suit = effectiveSuit(dumpCards[0], trumpSuit, trumpRankValue);
-  let minPower = Infinity, minCard = null;
-  for (const c of dumpCards) {
-    const p = cardPower(c, trumpSuit, trumpRankValue);
-    if (p < minPower) { minPower = p; minCard = c; }
-  }
-  for (const hand of otherHands) {
-    for (const c of hand) {
-      if (effectiveSuit(c, trumpSuit, trumpRankValue) === suit) {
-        if (cardPower(c, trumpSuit, trumpRankValue) > minPower) return true;
+  const comp = analyzeDumpComponents(dumpCards, trumpSuit, trumpRankValue);
+
+  // 1. 检查拖拉机组件是否被压
+  for (const tractor of comp.tractors) {
+    const minPower = cardPower(tractor[0][0], trumpSuit, trumpRankValue);
+    const len = tractor.length;
+    for (const hand of otherHands) {
+      const handTractors = getTractors(hand, suit, trumpSuit, trumpRankValue);
+      for (const ht of handTractors) {
+        if (ht.length >= len && cardPower(ht[ht.length - 1][0], trumpSuit, trumpRankValue) > minPower) {
+          return true;
+        }
       }
     }
   }
+
+  // 2. 检查对子组件是否被压
+  for (const pair of comp.pairs) {
+    const pairPower = cardPower(pair[0], trumpSuit, trumpRankValue);
+    for (const hand of otherHands) {
+      const handPairs = getPairs(hand, suit, trumpSuit, trumpRankValue);
+      for (const hp of handPairs) {
+        if (cardPower(hp[0], trumpSuit, trumpRankValue) > pairPower) return true;
+      }
+    }
+  }
+
+  // 3. 检查最小单张是否被压
+  if (comp.singles.length > 0) {
+    let minPower = Infinity;
+    for (const s of comp.singles) {
+      const p = cardPower(s, trumpSuit, trumpRankValue);
+      if (p < minPower) minPower = p;
+    }
+    for (const hand of otherHands) {
+      for (const c of hand) {
+        if (effectiveSuit(c, trumpSuit, trumpRankValue) === suit) {
+          if (cardPower(c, trumpSuit, trumpRankValue) > minPower) return true;
+        }
+      }
+    }
+  }
+
   return false;
 }
 
-// 从cards中选出最小的单张或对子
-function pickMinCards(cards, type, trumpSuit, trumpRankValue) {
-  if (type === 'pair') {
-    const groups = groupByPairs(cards).filter(g => g.length >= 2);
-    if (groups.length === 0) return [cards[cards.length-1]]; //  fallback
-    groups.sort((a,b) => cardPower(a[0], trumpSuit, trumpRankValue) - cardPower(b[0], trumpSuit, trumpRankValue));
-    return groups[0].slice(0,2);
+// 从cards中选出最小的有效牌型（甩牌失败时强制出最小单位）
+function pickMinCards(cards, trumpSuit, trumpRankValue) {
+  const groups = groupByPairs(cards);
+  const pairGroups = groups.filter(g => g.length === 2);
+  const singleGroups = groups.filter(g => g.length === 1);
+
+  if (pairGroups.length > 0) {
+    // 有对子，出最小对子
+    pairGroups.sort((a, b) => cardPower(a[0], trumpSuit, trumpRankValue) - cardPower(b[0], trumpSuit, trumpRankValue));
+    return pairGroups[0].slice(0, 2);
   }
-  const sorted = [...cards].sort((a,b) => cardPower(a, trumpSuit, trumpRankValue) - cardPower(b, trumpSuit, trumpRankValue));
+  if (singleGroups.length > 0) {
+    singleGroups.sort((a, b) => cardPower(a[0], trumpSuit, trumpRankValue) - cardPower(b[0], trumpSuit, trumpRankValue));
+    return [singleGroups[0][0]];
+  }
+  // fallback
+  const sorted = [...cards].sort((a, b) => cardPower(a, trumpSuit, trumpRankValue) - cardPower(b, trumpSuit, trumpRankValue));
   return [sorted[0]];
 }
 
@@ -317,11 +422,10 @@ class GameRoom {
       cards.push(c);
     }
 
-    const playType = parsePlayType(cards, this.trumpSuit, this.trumpRankValue);
-    if (!playType) return { ok: false, reason: 'invalid_play_type' };
-
     // 首攻
     if (this.currentTrick.plays.length === 0) {
+      const playType = parsePlayType(cards, this.trumpSuit, this.trumpRankValue);
+      if (!playType) return { ok: false, reason: 'invalid_play_type' };
       return { ok: true, playType, cards };
     }
 
@@ -333,55 +437,81 @@ class GameRoom {
     // 张数必须相同
     if (cards.length !== leadCount) return { ok: false, reason: `必须出${leadCount}张` };
 
-    const hand = p.cards.concat(cards); // 加上即将出的牌来检测（因为cards还没从hand移除）
-    // 实际上 cards 还没从 p.cards 移除，所以 hand 就是 p.cards
     const realHand = p.cards;
     const handSuitCards = cardsOfSuit(realHand, leadSuit, this.trumpSuit, this.trumpRankValue);
+    const playedSuitCards = cards.filter(c => effectiveSuit(c, this.trumpSuit, this.trumpRankValue) === leadSuit);
 
-    // 如果出的不是首攻花色，检查手牌是否还有首攻花色
-    if (playType.suit !== leadSuit) {
-      if (handSuitCards.length > 0) return { ok: false, reason: '必须跟首攻花色' };
+    // 原则1：有同花色必须优先出同花色
+    if (handSuitCards.length > 0) {
+      const mustPlaySuit = Math.min(handSuitCards.length, leadCount);
+      if (playedSuitCards.length < mustPlaySuit) {
+        return { ok: false, reason: '有同花色必须跟同花色' };
+      }
+    }
+
+    // 先计算 playType（后续比较需要）
+    let playType = parsePlayType(cards, this.trumpSuit, this.trumpRankValue);
+    if (!playType) playType = { type: 'dump', suit: leadSuit, cards, count: cards.length };
+
+    // 手牌中没有领出花色 → 可任意垫牌或毙牌
+    if (handSuitCards.length === 0) {
       return { ok: true, playType, cards };
     }
 
-    // 出了首攻花色，检查跟牌规则
+    // 出了首攻花色，检查牌型对应
     if (leadType.type === 'single') {
       return { ok: true, playType, cards };
     }
 
     if (leadType.type === 'pair') {
       const myPairs = getPairs(realHand, leadSuit, this.trumpSuit, this.trumpRankValue);
-      if (myPairs.length > 0 && playType.type !== 'pair' && playType.type !== 'tractor') {
+      const playedPairs = groupByPairs(playedSuitCards).filter(g => g.length >= 2);
+      if (myPairs.length > 0 && playedPairs.length === 0) {
         return { ok: false, reason: '有对子必须跟对子' };
       }
       return { ok: true, playType, cards };
     }
 
     if (leadType.type === 'tractor') {
+      const needPairs = leadType.pairs;
       const myTractors = getTractors(realHand, leadSuit, this.trumpSuit, this.trumpRankValue);
       const myPairs = getPairs(realHand, leadSuit, this.trumpSuit, this.trumpRankValue);
-      // 手牌有足够拖拉机但没出
-      if (myTractors.length > 0 && playType.type !== 'tractor') {
-        // 检查手牌是否有足够张数的拖拉机来跟
-        const needPairs = leadType.pairs;
-        const hasEnough = myTractors.some(t => t.length >= needPairs);
-        if (hasEnough) return { ok: false, reason: '有拖拉机必须跟拖拉机' };
+      const playedGroups = groupByPairs(playedSuitCards);
+      const playedPairs = playedGroups.filter(g => g.length >= 2);
+
+      // 有拖拉机必须跟拖拉机
+      const hasTractor = myTractors.some(t => t.length >= needPairs);
+      if (hasTractor) {
+        // 检查玩家出的牌是否构成足够长的拖拉机
+        if (playedPairs.length >= needPairs) {
+          const playedPairPowers = playedPairs.map(g => cardPower(g[0], this.trumpSuit, this.trumpRankValue)).sort((a,b)=>a-b);
+          let isTractor = true;
+          for (let i = 1; i < needPairs; i++) {
+            if (playedPairPowers[i] - playedPairPowers[i-1] !== 100) { isTractor = false; break; }
+          }
+          if (!isTractor) return { ok: false, reason: '有拖拉机必须跟拖拉机' };
+        } else {
+          return { ok: false, reason: '有拖拉机必须跟拖拉机' };
+        }
       }
-      // 有对子但没出对子（且没出拖拉机）
-      if (myPairs.length >= leadType.pairs && playType.type !== 'pair' && playType.type !== 'tractor') {
+
+      // 没有对子拖拉机时，有对子必须跟足对子数
+      if (!hasTractor && myPairs.length >= needPairs && playedPairs.length < needPairs) {
         return { ok: false, reason: '有对子必须跟对子' };
       }
-      // 有对子但出的对子数不够
-      if (playType.type === 'pair') {
-        const outPairs = groupByPairs(cards).filter(g => g.length === 2 && effectiveSuit(g[0], this.trumpSuit, this.trumpRankValue) === leadSuit).length;
-        if (myPairs.length >= leadType.pairs && outPairs < leadType.pairs) {
-          return { ok: false, reason: '对子数不够' };
-        }
+
+      return { ok: true, playType, cards };
+    }
+
+    // 首攻是甩牌：按内部组件拆分验证
+    if (leadType.type === 'dump') {
+      // 简化：确保出了足够的同花色牌
+      if (handSuitCards.length > 0 && playedSuitCards.length < Math.min(handSuitCards.length, leadCount)) {
+        return { ok: false, reason: '有同花色必须跟同花色' };
       }
       return { ok: true, playType, cards };
     }
 
-    // 首攻是甩牌或dump：简化处理，只要张数对且跟了首攻花色即可
     return { ok: true, playType, cards };
   }
 
@@ -400,8 +530,8 @@ class GameRoom {
     if (this.currentTrick.plays.length === 0 && check.playType.type === 'dump' && cards.length > 1) {
       const otherHands = this.players.filter((_,i) => i !== playerIndex).map(pl => pl.cards);
       if (canBeatDump(cards, otherHands, this.trumpSuit, this.trumpRankValue)) {
-        // 甩牌失败：强制出最小的单张或对子
-        const minCards = pickMinCards(cards, 'pair', this.trumpSuit, this.trumpRankValue);
+        // 甩牌失败：强制出最小单位
+        const minCards = pickMinCards(cards, this.trumpSuit, this.trumpRankValue);
         // 把没出的牌放回手牌
         for (const c of cards) {
           if (!minCards.find(mc => mc.id === c.id)) p.cards.push(c);
@@ -430,7 +560,7 @@ class GameRoom {
     let winner = this.currentTrick.plays[0];
     for (let i = 1; i < this.currentTrick.plays.length; i++) {
       const play = this.currentTrick.plays[i];
-      const w = this.comparePlay(winner, play, leadSuit);
+      const w = this.comparePlay(winner, play, leadSuit, leadType);
       if (w === play) winner = play;
     }
 
@@ -457,22 +587,65 @@ class GameRoom {
     return { success: true, type: 'trick_end', isGameEnd: false, winnerIndex: winner.index, trickScore };
   }
 
-  comparePlay(a, b, leadSuit) {
+  comparePlay(a, b, leadSuit, leadType) {
     const aSuit = a.playType.suit, bSuit = b.playType.suit;
     const aPower = this.getPlayPower(a), bPower = this.getPlayPower(b);
 
+    // 判断是否为有效毙牌（主牌牌型必须对应领出牌型）
+    const aValidKill = this.isValidKill(a, leadType, leadSuit);
+    const bValidKill = this.isValidKill(b, leadType, leadSuit);
+
+    // 垫牌（非领出花色且非有效毙牌）不能赢
+    const aIsDump = aSuit !== leadSuit && !aValidKill;
+    const bIsDump = bSuit !== leadSuit && !bValidKill;
+    if (aIsDump && !bIsDump) return b;
+    if (bIsDump && !aIsDump) return a;
+    if (aIsDump && bIsDump) return aPower > bPower ? a : b;
+
+    // 有效毙牌 > 非毙牌跟牌
+    if (aValidKill && !bValidKill) return a;
+    if (bValidKill && !aValidKill) return b;
+
+    // 都是有效毙牌，按牌型结构比较
+    if (aValidKill && bValidKill) {
+      // 拖拉机毙 > 对子毙 > 单张毙
+      if (a.playType.type === 'tractor' && b.playType.type !== 'tractor') return a;
+      if (b.playType.type === 'tractor' && a.playType.type !== 'tractor') return b;
+      if (a.playType.type === 'pair' && b.playType.type === 'single') return a;
+      if (b.playType.type === 'pair' && a.playType.type === 'single') return b;
+      return aPower > bPower ? a : b;
+    }
+
+    // 都没有毙牌，按领出花色比较
     if (leadSuit !== 'trump') {
-      if (aSuit === 'trump' && bSuit !== 'trump') return a;
-      if (bSuit === 'trump' && aSuit !== 'trump') return b;
-      if (aSuit === 'trump' && bSuit === 'trump') return aPower > bPower ? a : b;
       if (aSuit === leadSuit && bSuit !== leadSuit) return a;
       if (bSuit === leadSuit && aSuit !== leadSuit) return b;
       if (aSuit === leadSuit && bSuit === leadSuit) return aPower > bPower ? a : b;
       return aPower > bPower ? a : b;
     }
+    // 领出是主牌
     if (aSuit === 'trump' && bSuit !== 'trump') return a;
     if (bSuit === 'trump' && aSuit !== 'trump') return b;
     return aPower > bPower ? a : b;
+  }
+
+  isValidKill(play, leadType, leadSuit) {
+    // 只有领出是副牌时，主牌才有可能毙牌
+    if (leadSuit === 'trump') return false;
+    if (play.playType.suit !== 'trump') return false;
+
+    const playType = play.playType.type;
+    const leadTypeName = leadType.type;
+
+    // 单张领出：主牌单张可以毙
+    if (leadTypeName === 'single') return playType === 'single';
+    // 对子领出：主牌对子或拖拉机可以毙
+    if (leadTypeName === 'pair') return playType === 'pair' || playType === 'tractor';
+    // 拖拉机领出：必须主牌拖拉机才能毙
+    if (leadTypeName === 'tractor') return playType === 'tractor';
+    // 甩牌领出：简化处理，要求主牌牌型结构至少包含对应的对子/拖拉机
+    if (leadTypeName === 'dump') return false; // 暂不处理甩牌毙牌
+    return false;
   }
 
   getPlayPower(play) {
