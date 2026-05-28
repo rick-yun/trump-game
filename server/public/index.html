@@ -2,78 +2,104 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>升级（拖拉机）</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="app">
-  <!-- 登录/加入房间 -->
-  <div id="login-panel" class="panel">
-    <h1>🃏 升级（拖拉机）</h1>
-    <p>4人联机，2v2对抗</p>
-    <input type="text" id="player-name" placeholder="输入你的昵称" maxlength="10" value="">
-    <input type="text" id="room-id" placeholder="输入房间号（如 8888）" maxlength="10" value="">
-    <button id="btn-join">加入房间</button>
-    <div id="login-tip">💡 和好友约定同一个房间号即可同局</div>
+  <!-- 登录 -->
+  <div id="login-panel" class="panel center">
+    <div class="logo">🃏</div>
+    <h1>升级</h1>
+    <p class="sub">4人联机 · 2v2对抗</p>
+    <div class="form">
+      <input type="text" id="player-name" placeholder="输入昵称" maxlength="10" value="">
+      <input type="text" id="room-id" placeholder="房间号（如 8888）" maxlength="10" value="">
+      <button id="btn-join" class="btn-primary">加入房间</button>
+    </div>
+    <div class="tip">💡 和好友约定同一个房间号即可同局</div>
   </div>
 
-  <!-- 房间等待 -->
+  <!-- 房间 -->
   <div id="room-panel" class="panel hidden">
-    <h2>房间：<span id="room-id-display"></span></h2>
-    <div id="players-list" class="players-list"></div>
-    <div id="room-actions">
-      <button id="btn-ready" class="btn-primary">准备</button>
-      <button id="btn-cancel-ready">取消准备</button>
-      <button id="btn-start" class="btn-primary hidden">开始游戏（房主）</button>
+    <div class="room-header">
+      <div class="room-tag">房间 <span id="room-id-display"></span></div>
+      <div class="room-status" id="room-status">等待玩家加入...</div>
     </div>
-    <div id="room-tip"></div>
+    <div id="players-list" class="players-list"></div>
+    <div class="room-actions">
+      <button id="btn-ready" class="btn-primary">准备</button>
+      <button id="btn-cancel-ready" class="btn-secondary">取消</button>
+      <button id="btn-start" class="btn-accent hidden">开始游戏</button>
+      <button id="btn-add-bot" class="btn-secondary hidden">+机器人</button>
+    </div>
   </div>
 
   <!-- 游戏主界面 -->
   <div id="game-panel" class="panel hidden">
-    <!-- 顶部信息栏 -->
+    <!-- 顶部栏 -->
     <div class="top-bar">
-      <div class="info-item">房间：<span id="g-room"></span></div>
-      <div class="info-item">打：<span id="g-level"></span></div>
-      <div class="info-item">主：<span id="g-trump"></span></div>
-      <div class="info-item">墩：<span id="g-trick">0/25</span></div>
-      <div class="info-item">分：<span id="g-score"></span></div>
+      <div class="score-box">
+        <div class="score-row us"><span class="tag">我方</span><span class="num" id="score-us">0</span></div>
+        <div class="score-row them"><span class="tag">对方</span><span class="num" id="score-them">0</span></div>
+      </div>
+      <div class="center-info">
+        <div class="level-badge" id="g-level">2</div>
+        <div class="trump-info" id="g-trump">主:未选</div>
+      </div>
+      <div class="room-info">房间<span id="g-room"></span> 墩<span id="g-trick">0/25</span></div>
     </div>
 
     <!-- 牌桌 -->
-    <div class="table-area">
-      <div id="seats" class="seats"></div>
-      <div id="trick-area" class="trick-area"></div>
+    <div class="table-wrap">
+      <div class="table-inner">
+        <!-- 座位 -->
+        <div class="seat-wrap top" id="seat-top"></div>
+        <div class="seat-wrap left" id="seat-left"></div>
+        <div class="seat-wrap right" id="seat-right"></div>
+
+        <!-- 中央出牌区 -->
+        <div class="center-area">
+          <div id="trick-area" class="trick-area"></div>
+          <div id="table-msg" class="table-msg">等待开始...</div>
+        </div>
+      </div>
     </div>
 
-    <!-- 操作区 -->
-    <div id="action-area" class="action-area">
-      <div id="msg-area" class="msg-area"></div>
-      <div id="btn-area" class="btn-area"></div>
-    </div>
+    <!-- 自己座位（左下角小头像） -->
+    <div class="self-badge" id="seat-me"></div>
 
     <!-- 手牌区 -->
-    <div id="hand-area" class="hand-area">
+    <div class="hand-section">
       <div id="hand-cards" class="hand-cards"></div>
     </div>
 
-    <!-- 聊天 -->
-    <div class="chat-wrap">
+    <!-- 底部操作栏 -->
+    <div class="bottom-bar">
+      <div id="action-btns" class="action-btns"></div>
+      <div class="action-msg" id="action-msg"></div>
+      <button class="chat-btn" id="btn-chat">💬</button>
+    </div>
+
+    <!-- 聊天面板（可折叠） -->
+    <div id="chat-panel" class="chat-panel hidden">
       <div id="chat-history" class="chat-history"></div>
       <div class="chat-input-row">
-        <input type="text" id="chat-input" placeholder="按回车发送消息" maxlength="50">
+        <input type="text" id="chat-input" placeholder="按回车发送" maxlength="50">
         <button id="btn-send">发送</button>
       </div>
+      <div class="chat-close" id="btn-close-chat">✕</div>
     </div>
   </div>
 
   <!-- 结算弹窗 -->
   <div id="result-modal" class="modal hidden">
-    <div class="modal-content">
-      <h2>🎉 本局结束</h2>
-      <div id="result-text"></div>
-      <div id="result-scores"></div>
+    <div class="modal-card">
+      <div class="modal-icon">🎉</div>
+      <h2>本局结束</h2>
+      <div id="result-text" class="result-text"></div>
+      <div id="result-scores" class="result-scores"></div>
       <button id="btn-next" class="btn-primary">准备下一局</button>
     </div>
   </div>
