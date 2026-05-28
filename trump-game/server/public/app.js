@@ -1,14 +1,23 @@
-const SERVER_URL = '';
+// ================= 配置 =================
+// 如果你把后端单独部署在 Render，请把下面改成你的 Render 地址：
+// const SERVER_URL = 'https://你的服务名.onrender.com';
+const SERVER_URL = ''; // 空字符串表示同域（前后端一起部署时）
+
+// ================= 工具 =================
 const $ = id => document.getElementById(id);
 const SUIT_EMOJI = { spade: '♠', heart: '♥', diamond: '♦', club: '♣', joker: '🃏' };
 const SUIT_NAMES = { spade: '黑桃', heart: '红桃', diamond: '方块', club: '梅花' };
 
-let socket = null, myId = null, roomId = null, gameState = null, selectedCardIds = new Set();
+let socket = null;
+let myId = null;
+let roomId = null;
+let gameState = null;
+let selectedCardIds = new Set();
 
 function connect() {
   if (socket) return;
   socket = io(SERVER_URL || undefined);
-  socket.on('connect', () => console.log('connected'));
+  socket.on('connect', () => { console.log('connected'); });
   socket.on('game_state', onGameState);
   socket.on('joined', onJoined);
   socket.on('error_msg', msg => alert(msg));
@@ -16,7 +25,7 @@ function connect() {
   socket.on('game_end', onGameEnd);
 }
 
-/* 登录 */
+// ================= 登录面板 =================
 $('btn-join').onclick = () => {
   const name = $('player-name').value.trim() || '玩家';
   const rid = $('room-id').value.trim() || '8888';
@@ -32,14 +41,15 @@ function onJoined(data) {
   $('room-id-display').textContent = roomId;
 }
 
-/* 房间 */
+// ================= 房间面板 =================
 $('btn-ready').onclick = () => socket.emit('ready', { ready: true });
 $('btn-cancel-ready').onclick = () => socket.emit('ready', { ready: false });
 $('btn-start').onclick = () => socket.emit('start_game');
 
-/* 游戏状态 */
+// ================= 游戏主界面 =================
 function onGameState(state) {
   gameState = state;
+
   if (state.state === 'waiting') {
     $('room-panel').classList.remove('hidden');
     $('game-panel').classList.add('hidden');
@@ -48,8 +58,10 @@ function onGameState(state) {
     $('btn-start').classList.toggle('hidden', !isHost);
     return;
   }
+
   $('room-panel').classList.add('hidden');
   $('game-panel').classList.remove('hidden');
+
   renderTopBar(state);
   renderSeats(state);
   renderTrick(state);
@@ -62,53 +74,46 @@ function renderTopBar(s) {
   $('g-level').textContent = s.currentLevel;
   $('g-trump').textContent = s.trumpSuit ? (SUIT_NAMES[s.trumpSuit] + SUIT_EMOJI[s.trumpSuit]) : '未选';
   $('g-trick').textContent = `${s.trickCount}/25`;
-  const myTeam = s.myTeam, opp = 1 - myTeam;
-  $('g-score-us').textContent = s.roundScores[myTeam];
-  $('g-score-them').textContent = s.roundScores[opp];
+  const myTeam = s.myTeam;
+  const opp = 1 - myTeam;
+  $('g-score').textContent = `我方${s.roundScores[myTeam]} : 对方${s.roundScores[opp]}`;
 }
 
 function renderSeats(s) {
+  const container = $('seats');
+  container.innerHTML = '';
   const meIdx = s.myIndex;
   if (meIdx === -1) return;
-  const rel = (targetIdx) => (targetIdx - meIdx + 4) % 4; // 0=me,1=right,2=top,3=left
-  const posMap = { 0: 'seat-me', 1: 'seat-right', 2: 'seat-top', 3: 'seat-left' };
+  const relIndex = (targetIdx) => (targetIdx - meIdx + 4) % 4;
+
   for (const p of s.allPlayers) {
-    const r = rel(p.index);
-    const el = $(posMap[r]);
-    if (!el) continue;
-    const teamLabel = p.team === s.myTeam ? '友' : '敌';
-    const activeCls = p.index === s.currentPlayerIndex ? 'active' : '';
-    el.className = `seat ${posMap[r] === 'seat-me' ? 'me' : ''} ${activeCls}`;
-    el.innerHTML = `
-      <div class="s-avatar">${teamLabel}</div>
-      <div class="s-name">${p.name}</div>
-      <div class="s-count">${p.cardCount} 张</div>
+    const rel = relIndex(p.index);
+    const div = document.createElement('div');
+    div.className = `seat seat-pos-${rel} ${p.index === s.currentPlayerIndex ? 'active' : ''}`;
+    const teamLabel = p.team === s.myTeam ? '(友)' : '(敌)';
+    div.innerHTML = `
+      <div class="seat-name">${p.name} ${teamLabel}</div>
+      <div class="seat-cards">剩余 ${p.cardCount} 张</div>
     `;
+    container.appendChild(div);
   }
 }
 
 function renderTrick(s) {
   const area = $('trick-area');
   area.innerHTML = '';
-  if (!s.currentTrick || !s.currentTrick.plays.length) {
-    $('table-msg').textContent = s.state === 'playing' ? '等待出牌...' : '';
-    return;
-  }
-  $('table-msg').textContent = '';
+  if (!s.currentTrick || !s.currentTrick.plays.length) return;
   for (const play of s.currentTrick.plays) {
     const p = s.allPlayers.find(x => x.index === play.index);
+    const div = document.createElement('div');
+    div.className = 'trick-card';
     const isRed = play.card.suit === 'heart' || play.card.suit === 'diamond';
     const colorCls = play.card.suit === 'joker' ? 'joker' : (isRed ? 'red' : 'black');
-    const wrap = document.createElement('div');
-    wrap.className = 'trick-card-wrap';
-    wrap.innerHTML = `
+    div.innerHTML = `
       <div class="tc-player">${p ? p.name : ''}</div>
-      <div class="trick-card ${colorCls}">
-        <div class="tc-val">${play.card.value}</div>
-        <div class="tc-suit">${SUIT_EMOJI[play.card.suit]}</div>
-      </div>
+      <div class="${colorCls}">${SUIT_EMOJI[play.card.suit]}${play.card.value}</div>
     `;
-    area.appendChild(wrap);
+    area.appendChild(div);
   }
 }
 
@@ -134,16 +139,20 @@ function toggleCard(id) {
   else selectedCardIds.add(id);
   renderHand(gameState);
 }
-function clearSelection() { selectedCardIds.clear(); renderHand(gameState); }
 
-/* 操作按钮 */
+function clearSelection() {
+  selectedCardIds.clear();
+  renderHand(gameState);
+}
+
+// ================= 操作按钮 =================
 function renderActions(s) {
-  const msg = $('action-msg');
-  const btns = $('action-btns');
+  const msg = $('msg-area');
+  const btns = $('btn-area');
   btns.innerHTML = '';
 
   if (s.state === 'calling' && s.myIndex === s.dealerIndex) {
-    msg.textContent = '请选择主花色';
+    msg.textContent = '你是庄家，请选择主花色';
     for (const suit of ['spade','heart','diamond','club']) {
       const b = document.createElement('button');
       b.textContent = SUIT_NAMES[suit] + SUIT_EMOJI[suit];
@@ -154,7 +163,7 @@ function renderActions(s) {
   }
 
   if (s.state === 'burying' && s.myIndex === s.dealerIndex) {
-    msg.textContent = `选择8张底牌（已选 ${selectedCardIds.size}/8）`;
+    msg.textContent = `请从手牌中选择8张作为底牌（已选${selectedCardIds.size}张）`;
     const b = document.createElement('button');
     b.textContent = '确认扣底';
     b.onclick = () => {
@@ -191,10 +200,11 @@ function renderActions(s) {
     msg.textContent = '本局已结束';
     return;
   }
+
   msg.textContent = '';
 }
 
-/* 聊天 */
+// ================= 聊天 =================
 function onChat(data) {
   const box = $('chat-history');
   const line = document.createElement('div');
@@ -203,6 +213,7 @@ function onChat(data) {
   box.appendChild(line);
   box.scrollTop = box.scrollHeight;
 }
+
 $('btn-send').onclick = sendChat;
 $('chat-input').onkeydown = e => { if (e.key === 'Enter') sendChat(); };
 function sendChat() {
@@ -211,24 +222,27 @@ function sendChat() {
   socket.emit('chat', { text });
   $('chat-input').value = '';
 }
-function escapeHtml(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escapeHtml(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
-/* 结算 */
+// ================= 结算 =================
 function onGameEnd(res) {
   $('result-text').textContent = res.resultText;
   const myTeam = gameState.myTeam;
   $('result-scores').innerHTML = `
-    <div>我方得分：${res.scores[myTeam]}</div>
-    <div>对方得分：${res.scores[1-myTeam]}</div>
+    <div>我方(${myTeam})得分：${res.scores[myTeam]}</div>
+    <div>对方(${1-myTeam})得分：${res.scores[1-myTeam]}</div>
   `;
   $('result-modal').classList.remove('hidden');
 }
+
 $('btn-next').onclick = () => {
   $('result-modal').classList.add('hidden');
   socket.emit('next_game');
 };
 
-/* 房间列表 */
+// ================= 房间列表（等待阶段） =================
 function renderRoomList(s) {
   const box = $('players-list');
   box.innerHTML = '';
@@ -237,14 +251,9 @@ function renderRoomList(s) {
     div.className = 'player-card';
     const readyStr = p.ready ? '✅ 已准备' : '⏳ 未准备';
     const teamStr = p.team === 0 ? 'A队' : 'B队';
-    div.innerHTML = `
-      <div class="p-avatar">${p.name[0]}</div>
-      <div class="p-name">${p.name}</div>
-      <div class="p-status">${readyStr}</div>
-      <div class="p-team">${teamStr}</div>
-    `;
+    div.innerHTML = `<div class="p-name">${p.name}</div><div class="p-status">${readyStr}</div><div class="p-team">${teamStr}</div>`;
     box.appendChild(div);
   }
   const readyCount = s.allPlayers.filter(p => p.ready).length;
-  $('room-status').textContent = `当前 ${s.allPlayers.length}/4 人，${readyCount} 人已准备`;
+  $('room-tip').textContent = `当前 ${s.allPlayers.length}/4 人，${readyCount} 人已准备`;
 }
